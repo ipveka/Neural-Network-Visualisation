@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import datetime
+import sys
 
 import numpy as np
 import torch
@@ -23,6 +25,13 @@ from torchvision import datasets, transforms
 MNIST_MEAN = 0.1307
 MNIST_STD = 0.3081
 BASE_DATASET_SIZE = 60_000
+
+
+def log(message: str) -> None:
+    """Print a message with a timestamp."""
+    timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {message}")
+    sys.stdout.flush()
 
 
 def resolve_device(preferred: str | None = None) -> torch.device:
@@ -42,7 +51,13 @@ def resolve_device(preferred: str | None = None) -> torch.device:
 
 
 class SmallMLP(nn.Module):
-    """Simple fully connected network for MNIST digits."""
+    """
+    Simple fully connected network for MNIST digits.
+    
+    This class defines the PyTorch model structure. It's a standard MLP
+    with ReLU activations, designed to be small enough for real-time
+    3D visualization in the browser.
+    """
 
     def __init__(self, input_dim: int, hidden_dims: Sequence[int], num_classes: int = 10):
         super().__init__()
@@ -73,7 +88,13 @@ class LayerMetadata:
 
 @dataclass
 class LayerSnapshot:
-    """Snapshot of a dense layer's parameters."""
+    """
+    Snapshot of a dense layer's parameters.
+    
+    This dataclass holds the weights and biases of a specific layer at a
+    specific point in time. These snapshots are serialized to JSON/binary
+    to allow the frontend to 'replay' the training history.
+    """
 
     metadata: LayerMetadata
     weight: torch.Tensor
@@ -375,9 +396,17 @@ def main() -> None:
 
     device = resolve_device(args.device)
     hidden_dims = parse_hidden_dims(args.hidden_dims)
-    print(f"Using device: {device}")
+    
+    log(f"Starting training pipeline on device: {device.type.upper()}")
+    log(f"Configuration: epochs={args.epochs}, batch_size={args.batch_size}, lr={args.lr}")
+    log(f"Hidden layers: {hidden_dims}")
 
     model = SmallMLP(28 * 28, hidden_dims).to(device)
+    
+    print("\nModel Architecture:")
+    print("=" * 40)
+    print(model)
+    print("=" * 40 + "\n")
 
     transform = transforms.Compose(
         [
@@ -505,11 +534,18 @@ def main() -> None:
                     training_complete = True
                     break
 
+                if global_step % 100 == 0:
+                    log(
+                        f"Epoch {epoch} [{epoch_images}/{len(train_dataset)} "
+                        f"({100. * epoch_images / len(train_dataset):.0f}%)] "
+                        f"Loss: {loss.item():.6f}"
+                    )
+
             avg_epoch_loss = epoch_loss / epoch_images if epoch_images else 0.0
             if not training_complete:
                 # Ensure we keep tabs on accuracy even if no milestone was reached in this epoch.
                 last_eval_accuracy = evaluate(model, test_loader, device)
-            print(
+            log(
                 f"Epoch {epoch:02d} - avg loss: {avg_epoch_loss:.4f} - "
                 f"test accuracy: {last_eval_accuracy * 100:.2f}% - "
                 f"images seen: {images_seen:,}"
@@ -522,7 +558,9 @@ def main() -> None:
     if not layer_metadata:
         raise RuntimeError("Layer metadata could not be captured for export.")
     export_model(args.export_path, layer_metadata, timeline_entries)
-    print(f"Exported weights to {args.export_path.resolve()}")
+    export_model(args.export_path, layer_metadata, timeline_entries)
+    log(f"Exported weights to {args.export_path.resolve()}")
+    log("Training pipeline finished successfully.")
 
 
 if __name__ == "__main__":
